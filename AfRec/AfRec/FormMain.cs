@@ -498,7 +498,6 @@ namespace AfRec
                                     {
                                         if (((HttpWebResponse)webEx.Response).StatusCode == HttpStatusCode.NotFound)
                                         {
-                                            numFinTs++;
                                             break;
                                         }
                                     }
@@ -643,6 +642,8 @@ namespace AfRec
                     if (concatFiles.Count == 1)
                     {
                         File.Move(concatFiles[0], completeFileName);
+                        AppendTextTextBoxMessage(NORMAL_MESSAGE_PREFIX + "完了しました。ファイル名：" + completeFileName + Environment.NewLine);
+                        UpdateMessageText();
                     }
                     else
                     {
