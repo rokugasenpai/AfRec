@@ -369,11 +369,13 @@ namespace AfRec
                             try
                             {
                                 wc.DownloadFile(chat, this.saveToPath + Path.DirectorySeparatorChar + SanitizeFileName(this.vno + " - " + this.nick + " - " + this.title + " - " + (chatList.IndexOf(chat) + 1).ToString() + ".xml"));
+                                
                                 if (worker.CancellationPending)
                                 {
                                     AppendTextTextBoxMessage(NORMAL_MESSAGE_PREFIX + "中止しました。" + Environment.NewLine);
                                     return;
                                 }
+
                                 break;
                             }
                             catch (WebException webEx)
@@ -410,6 +412,7 @@ namespace AfRec
                             try
                             {
                                 res = Encoding.UTF8.GetString(wc.DownloadData(m3u8));
+
                                 if (worker.CancellationPending)
                                 {
                                     AppendTextTextBoxMessage(NORMAL_MESSAGE_PREFIX + "中止しました。" + Environment.NewLine);
@@ -450,10 +453,10 @@ namespace AfRec
                 DriveInfo drive = new DriveInfo(driveLetter);
                 Int64 mb = (Int64)Math.Pow(1024, 2);
                 Int64 gb = (Int64)Math.Pow(1024, 3);
-                Int64 shortage = (numTs * (2 * mb) + gb) - drive.AvailableFreeSpace;
+                Int64 shortage = (numTs * (2 * mb) * 2) - drive.AvailableFreeSpace;
                 if (shortage > 0)
                 {
-                    Double shortageGb = (Double)shortage / gb;
+                    Double shortageGb = Math.Round((Double)shortage / gb, 2);
                     AppendTextTextBoxMessage(ERROR_MESSAGE_PREFIX + driveLetter + "ドライブの空き容量が" + shortageGb.ToString() + "GB不足しています。" + Environment.NewLine);
                     return;
                 }
@@ -468,7 +471,8 @@ namespace AfRec
                         using (WebClient wc = new WebClient())
                         {
                             Int32 cnt = 0;
-                            String fileName = (numFinTs + 1).ToString() + ".ts";
+                            String zeroAdded = "0000" + (numFinTs + 1).ToString();
+                            String fileName = zeroAdded.Substring(zeroAdded.Length - 4, 4) + ".ts";
 
                             while (cnt <= RETRY_TIMES)
                             {
@@ -476,8 +480,10 @@ namespace AfRec
                                 {
                                     wc.DownloadFile(ts, this.tempPath + Path.DirectorySeparatorChar + fileName);
                                     numFinTs++;
+
                                     AppendTextTextBoxMessage(NORMAL_MESSAGE_PREFIX + numFinTs.ToString() + " / " + numTs.ToString() + " 動画ファイルのダウンロード中です。" + Environment.NewLine);
                                     UpdateMessageText();
+                                    
                                     if (worker.CancellationPending)
                                     {
                                         AppendTextTextBoxMessage(NORMAL_MESSAGE_PREFIX + "中止しました。" + Environment.NewLine);
@@ -512,47 +518,167 @@ namespace AfRec
 
                 AppendTextTextBoxMessage(NORMAL_MESSAGE_PREFIX + "動画ファイルの結合、MP4変換を開始します。" + Environment.NewLine);
                 UpdateMessageText();
-                String outputFileName = SanitizeFileName(this.vno + " - " + this.nick + " - " + this.title + ".mp4");
+                String completeFileName = SanitizeFileName(this.vno + " - " + this.nick + " - " + this.title + ".mp4");
+
+                // コマンドラインでffmpegのconcatを利用する際、パラメーターが長すぎるとエラーが出るため
+                // 一定数で連結させ、その複数あるかもしれない連結TSファイルを、1つのMP4ファイルに結合する。
+                // ffmpegのconcatは元ファイルがTS形式でないと結合できない。
 
                 try
                 {
+                    FileInfo[] files = new DirectoryInfo(this.tempPath).GetFiles();
 
-                    using (Process ps = new Process())
+                    // ファイル名昇順にソート
+                    Array.Sort<FileInfo>(files, delegate(FileInfo x, FileInfo y)
                     {
-                        List<String> tsFiles = new List<String>();
-                        FileInfo[] files = new DirectoryInfo(this.tempPath).GetFiles();
-                        foreach (FileInfo file in files)
-                        {
-                            if (file.Extension == ".ts")
-                            {
-                                tsFiles.Add(file.FullName);
-                            }
-                        }
-                        String filePath = saveToPath + Path.DirectorySeparatorChar + outputFileName;
+                        return x.Name.CompareTo(y.Name);
+                    });
 
-                        ps.StartInfo.FileName = FFMPEG_EXE_PATH;
-                        ps.StartInfo.Arguments = "-y -i \"concat:" + String.Join("|", tsFiles.ToArray()) + "\" -c copy -bsf:a aac_adtstoasc \"" + filePath + "\"";
-                        ps.StartInfo.CreateNoWindow = true;
-                        ps.StartInfo.UseShellExecute = false;
-                        ps.Start();
-                        System.Threading.Thread.Sleep(5000);
-                        while (true)
+                    List<String> tsFiles = new List<String>();
+                    List<String> concatFiles = new List<String>();
+                    Int32 numConcat = 500;
+                    Int32 cntConcat = 0;
+
+                    foreach (FileInfo file in files)
+                    {
+
+                        if (Regex.Match(file.Name, @"\d+\.ts").Success)
                         {
-                            if (ps.HasExited)
+                            tsFiles.Add(file.FullName);
+                            if (tsFiles.Count == numConcat)
                             {
-                                break;
+
+                                using (Process ps = new Process())
+                                {
+                                    String fileName = (cntConcat - numConcat + 1).ToString() + "_" + cntConcat.ToString() + ".ts";
+                                    String filePath = this.tempPath + Path.DirectorySeparatorChar + fileName;
+
+                                    ps.StartInfo.FileName = FFMPEG_EXE_PATH;
+                                    ps.StartInfo.Arguments = "-y -i \"concat:" + String.Join("|", tsFiles.ToArray()) + "\" -c copy \"" + filePath + "\"";
+                                    ps.StartInfo.CreateNoWindow = true;
+                                    ps.StartInfo.UseShellExecute = false;
+                                    ps.Start();
+                                    System.Threading.Thread.Sleep(5000);
+
+                                    while (true)
+                                    {
+                                        if (ps.HasExited)
+                                        {
+                                            cntConcat += tsFiles.Count;
+                                            concatFiles.Add(filePath);
+
+                                            foreach (String ts in tsFiles)
+                                            {
+                                                File.Delete(ts);
+                                            }
+                                            tsFiles = new List<String>();
+
+                                            AppendTextTextBoxMessage(NORMAL_MESSAGE_PREFIX + cntConcat.ToString() + " / " + numFinTs.ToString() + " 動画ファイルの結合・MP4変換中です。" + Environment.NewLine);
+                                            UpdateMessageText();
+
+                                            break;
+                                        }
+
+                                        if (worker.CancellationPending)
+                                        {
+                                            ps.Kill();
+                                            AppendTextTextBoxMessage(NORMAL_MESSAGE_PREFIX + "中止しました。" + Environment.NewLine);
+                                            return;
+                                        }
+
+                                        System.Threading.Thread.Sleep(100);
+                                    }
+                                    
+                                }
                             }
-                            if (worker.CancellationPending)
-                            {
-                                ps.Kill();
-                                AppendTextTextBoxMessage(NORMAL_MESSAGE_PREFIX + "中止しました。" + Environment.NewLine);
-                                return;
-                            }
-                            System.Threading.Thread.Sleep(100);
                         }
                     }
 
-                    AppendTextTextBoxMessage(NORMAL_MESSAGE_PREFIX + "完了しました。ファイル名：" + outputFileName + Environment.NewLine);
+                    if (tsFiles.Count < numConcat)
+                    {
+
+                        using (Process ps = new Process())
+                        {
+                            String fileName = (cntConcat - (cntConcat % numConcat) + 1).ToString() + "_" + cntConcat.ToString() + ".ts";
+                            String filePath = this.tempPath + Path.DirectorySeparatorChar + fileName;
+
+                            ps.StartInfo.FileName = FFMPEG_EXE_PATH;
+                            ps.StartInfo.Arguments = "-y -i \"concat:" + String.Join("|", tsFiles.ToArray()) + "\" -c copy \"" + filePath + "\"";
+                            ps.StartInfo.CreateNoWindow = true;
+                            ps.StartInfo.UseShellExecute = false;
+                            ps.Start();
+                            System.Threading.Thread.Sleep(5000);
+
+                            while (true)
+                            {
+                                if (ps.HasExited)
+                                {
+                                    cntConcat += tsFiles.Count;
+                                    concatFiles.Add(filePath);
+
+                                    foreach (String ts in tsFiles)
+                                    {
+                                        File.Delete(ts);
+                                    }
+                                    tsFiles = new List<String>();
+
+                                    AppendTextTextBoxMessage(NORMAL_MESSAGE_PREFIX + cntConcat.ToString() + " / " + numFinTs.ToString() + " 動画ファイルの結合・MP4変換中です。" + Environment.NewLine);
+                                    UpdateMessageText();
+
+                                    break;
+                                }
+
+                                if (worker.CancellationPending)
+                                {
+                                    ps.Kill();
+                                    AppendTextTextBoxMessage(NORMAL_MESSAGE_PREFIX + "中止しました。" + Environment.NewLine);
+                                    return;
+                                }
+
+                                System.Threading.Thread.Sleep(100);
+                            }
+                        }
+                    }
+
+                    if (concatFiles.Count == 1)
+                    {
+                        File.Move(concatFiles[0], completeFileName);
+                    }
+                    else
+                    {
+
+                        using (Process ps = new Process())
+                        {
+                            String filePath = this.saveToPath + Path.DirectorySeparatorChar + completeFileName;
+
+                            ps.StartInfo.FileName = FFMPEG_EXE_PATH;
+                            ps.StartInfo.Arguments = "-y -i \"concat:" + String.Join("|", concatFiles.ToArray()) + "\" -c copy -bsf:a aac_adtstoasc \"" + filePath + "\"";
+                            ps.StartInfo.CreateNoWindow = true;
+                            ps.StartInfo.UseShellExecute = false;
+                            ps.Start();
+                            System.Threading.Thread.Sleep(5000);
+
+                            while (true)
+                            {
+                                if (ps.HasExited)
+                                {
+                                    AppendTextTextBoxMessage(NORMAL_MESSAGE_PREFIX + "完了しました。ファイル名：" + completeFileName + Environment.NewLine);
+                                    UpdateMessageText();
+                                    break;
+                                }
+
+                                if (worker.CancellationPending)
+                                {
+                                    ps.Kill();
+                                    AppendTextTextBoxMessage(NORMAL_MESSAGE_PREFIX + "中止しました。" + Environment.NewLine);
+                                    return;
+                                }
+
+                                System.Threading.Thread.Sleep(100);
+                            }
+                        }
+
+                    }
                 }
                 catch (Exception ex)
                 {
