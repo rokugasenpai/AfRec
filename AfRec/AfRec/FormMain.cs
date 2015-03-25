@@ -1,6 +1,6 @@
 ﻿﻿/*--------------------------------------------------------------------------
 * AfRec
-* ver 1.0.0.0 (2015/03/07)
+* ver 1.0.3.0 (2015/03/25)
 *
 * Copyright © 2015 Rokugasenpai All Rights Reserved.
 * licensed under Microsoft Public License(Ms-PL)
@@ -47,8 +47,71 @@ using System.Diagnostics;
 
 using Codeplex.Data;
 
+﻿/*--------------------------------------------------------------------------
+* 処理概要
+* ざっくりとした内容なので、必ずコードを見てください。
+*
+* ○ 処理開始(フォームの表示)
+* ↓ 
+* < FFmpegはあるか？ > → ○ エラー表示、処理終了
+* ↓ 
+* < Config.xmlはあるか？ > → [ Config.xmlの生成と               ]
+* │                          [ デフォルトの保存先フォルダの作成 ]
+* ↓
+* I ユーザーがテキストボックスにURLを入力 I
+* ↓
+* I ユーザーが開始ボタンを押下            I
+* ↓                                        ↓
+* [ 放送タイトル、放送者名を取得するため  ] I ユーザーがキャンセルボタンを押下 I
+* [ APIを叩いて、jsonをダウンロード       ] ↓
+* ↓                                        [ 処理をキャンセル                 ]
+* < 成功？ > → [一定時間後リトライ]
+* ↓ 
+* [ jsonより動画データであるtsファイルの  ]
+* [ URLが記載されているm3u8ファイルを     ]
+* [ ダウンロードするためのAPIキーを抽出   ]
+* ↓ 
+* ／ すべて終わるまでループ              ＼
+* [ m3u8ファイルをダウンロード            ]
+* ↓
+* < 成功？ > → [一定時間後リトライ]
+* ↓ 
+* ＼                                     ／
+* ↓
+* [ tsファイルのURLを抽出                 ]
+* ↓
+* ／ すべて終わるまでループ              ＼
+* [ tsファイルをダウンロード              ]
+* ↓
+* < 成功？ > → [一定時間後リトライ]
+* ↓
+* ＼                                     ／
+* ↓
+* [ tsファイルの数より                    ]
+* [ 必要なディスク容量を算出              ]
+* ↓
+* < 必要なディスク容量？ > → ○ エラー表示、処理終了
+* ↓
+* ／ すべて終わるまでループ              ＼
+* [ FFmpegを使い100ずつtsファイルを結合   ]
+* ↓
+* < 成功？ > → ○ エラー表示、処理終了
+* ↓
+* ＼                                     ／
+* ↓
+* < 結合ファイルが複数？ > → [ FFmpegを使いmp4変換 ]
+* ↓                                              │
+* [ FFmpegを使い最終的な結合・mp4変換     ]       │
+* │←──────────────────────┘
+* ↓
+* < 成功？ > → ○ エラー表示、処理終了
+* ↓
+* ○ 成功表示、処理終了
+*--------------------------------------------------------------------------*/
+
 namespace AfRec
 {
+
     public partial class FormMain : Form
     {
         private readonly String CONFIG_XML_PATH = Directory.GetParent(Application.ExecutablePath).FullName + Path.DirectorySeparatorChar + "Config.xml";
@@ -57,15 +120,22 @@ namespace AfRec
         private readonly String CANCEL_BUTTON_TEXT = "キャンセル";
         private readonly String NORMAL_MESSAGE_PREFIX = "【 正常 】";
         private readonly String ERROR_MESSAGE_PREFIX = "【エラー】";
+        // ダウンロードエラー(WebClientのWebException)のリトライ。
         private readonly Int32 RETRY_TIMES = 1;
         private readonly Int32 RETRY_INTERVAL = 5000;
 
-        private Boolean isError = false;
+        // 処理の開始が可能かどうか。例えばFFmpegがなければtrue。
+        private Boolean isUnstartableError = false;
         private String saveToPath = "";
+        // ダウンロードしたTS形式の動画ファイルなどの一時的なファイルが置かれる。
         private String tempPath = "";
+        // 入力されたURLから判別できる放送主のIDを表す。
         private String id = "";
+        // 入力されたURLから判別できる放送のIDを表す。
         private String vno = "";
+        // ダウンロードしたjsonファイルから判別できる放送タイトルを表す。
         private String title = "";
+        // ダウンロードしたjsonファイルから判別できる放送主の名前を表す。
         private String nick = "";
 
         protected delegate void VoidCallback();
@@ -138,10 +208,11 @@ namespace AfRec
             if (!File.Exists(FFMPEG_EXE_PATH))
             {
                 textBoxMessage.Text += ERROR_MESSAGE_PREFIX + "ffmepg.exeが見つかりませんでした。" + Environment.NewLine;
-                this.isError = true;
+                this.isUnstartableError = true;
                 return;
             }
 
+            // 保存先情報を格納するxmlの処理
             this.saveToPath = Directory.GetParent(Application.ExecutablePath).FullName + Path.DirectorySeparatorChar + "Rec";
             XmlDocument xmlDoc = new XmlDocument();
             if (!File.Exists(CONFIG_XML_PATH))
@@ -187,7 +258,7 @@ namespace AfRec
                 catch (Exception)
                 {
                     textBoxMessage.Text += ERROR_MESSAGE_PREFIX + "Config.xmlの読み込みに失敗しました。" + Environment.NewLine;
-                    this.isError = true;
+                    this.isUnstartableError = true;
                     return;
                 }
 
@@ -200,7 +271,7 @@ namespace AfRec
                     catch (Exception)
                     {
                         textBoxMessage.Text += ERROR_MESSAGE_PREFIX + "保存先フォルダーの作成に失敗しました。" + Environment.NewLine;
-                        this.isError = true;
+                        this.isUnstartableError = true;
                         return;
                     }
                 }
@@ -239,7 +310,7 @@ namespace AfRec
         {
             if (button.Text == START_BUTTON_TEXT)
             {
-                if (this.isError)
+                if (this.isUnstartableError)
                 {
                     return;
                 }
@@ -284,17 +355,19 @@ namespace AfRec
                 catch (Exception)
                 {
                     textBoxMessage.Text += ERROR_MESSAGE_PREFIX + "一時フォルダーの作成に失敗しました。" + Environment.NewLine;
-                    this.isError = true;
+                    this.isUnstartableError = true;
                     return;
                 }
 
                 String json = "";
 
+                // APIよりjsonをダウンロード
                 using (WebClient wc1 = new WebClient())
                 {
                     Int32 cnt = 0;
                     String url = "http://api.afreecatv.jp/video/view_video.php";
 
+                    // POSTのパラメータの生成
                     NameValueCollection postData = new NameValueCollection();
                     postData.Add("vno", this.vno);
                     postData.Add("rt", "json");
@@ -335,6 +408,7 @@ namespace AfRec
                 List<String> chatList = new List<string>();
                 Dictionary<String, List<String>> tsDict = new Dictionary<String, List<String>>();
 
+                // jsonよりm3u8ファイルのURLを抽出
                 try
                 {
                     dynamic obj = DynamicJson.Parse(json);
@@ -361,6 +435,7 @@ namespace AfRec
                 foreach (String chat in chatList)
                 {
 
+                    // 動画情報m3u8ファイルのダウンロード
                     using (WebClient wc = new WebClient())
                     {
                         Int32 cnt = 0;
@@ -435,6 +510,7 @@ namespace AfRec
                         AppendTextTextBoxMessage(NORMAL_MESSAGE_PREFIX + "動画情報" + new Uri(key).Segments.Last() + "をダウンロードしました。" + Environment.NewLine);
                         UpdateMessageText();
 
+                        // m3u8ファイルよりtsファイルのURLを抽出
                         Regex regex = new Regex(@"(http://.+)", RegexOptions.Compiled);
                         MatchCollection matches = regex.Matches(res);
                         foreach (Match match in matches)
@@ -449,11 +525,12 @@ namespace AfRec
 
                 }
 
+                // tsファイルの数より必要なディスク容量を算出
                 String driveLetter = Application.ExecutablePath.Substring(0, 1);
                 DriveInfo drive = new DriveInfo(driveLetter);
                 Int64 mb = (Int64)Math.Pow(1024, 2);
                 Int64 gb = (Int64)Math.Pow(1024, 3);
-                Int64 shortage = (numTs * (2 * mb) * 2) - drive.AvailableFreeSpace;
+                Int64 shortage = (numTs * (3 * mb) * 2) - drive.AvailableFreeSpace;
                 if (shortage > 0)
                 {
                     Double shortageGb = Math.Round((Double)shortage / gb, 2);
@@ -468,6 +545,7 @@ namespace AfRec
                     foreach(String ts in kv.Value)
                     {
 
+                        // tsファイルのダウンロード
                         using (WebClient wc = new WebClient())
                         {
                             Int32 cnt = 0;
@@ -481,7 +559,7 @@ namespace AfRec
                                     wc.DownloadFile(ts, this.tempPath + Path.DirectorySeparatorChar + fileName);
                                     numFinTs++;
 
-                                    AppendTextTextBoxMessage(NORMAL_MESSAGE_PREFIX + numFinTs.ToString() + " / " + numTs.ToString() + " 動画ファイルのダウンロード中です。" + Environment.NewLine);
+                                    AppendTextTextBoxMessage(NORMAL_MESSAGE_PREFIX + numFinTs.ToString() + " / " + numTs.ToString() + " 動画ファイルをダウンロードしました。" + Environment.NewLine);
                                     UpdateMessageText();
                                     
                                     if (worker.CancellationPending)
@@ -515,13 +593,8 @@ namespace AfRec
                     }
                 }
 
-                AppendTextTextBoxMessage(NORMAL_MESSAGE_PREFIX + "動画ファイルの結合、MP4変換を開始します。" + Environment.NewLine);
+                AppendTextTextBoxMessage(NORMAL_MESSAGE_PREFIX + "動画ファイルの結合を開始します。" + Environment.NewLine);
                 UpdateMessageText();
-                String completeFileName = SanitizeFileName(this.vno + " - " + this.nick + " - " + this.title + ".mp4");
-
-                // コマンドラインでffmpegのconcatを利用する際、パラメーターが長すぎるとエラーが出るため
-                // 一定数で連結させ、その複数あるかもしれない連結TSファイルを、1つのMP4ファイルに結合する。
-                // ffmpegのconcatは元ファイルがTS形式でないと結合できない。
 
                 try
                 {
@@ -535,7 +608,7 @@ namespace AfRec
 
                     List<String> tsFiles = new List<String>();
                     List<String> concatFiles = new List<String>();
-                    Int32 numConcat = 500;
+                    Int32 numConcat = 100;
                     Int32 cntConcat = 0;
 
                     foreach (FileInfo file in files)
@@ -544,35 +617,47 @@ namespace AfRec
                         if (Regex.Match(file.Name, @"\d+\.ts").Success)
                         {
                             tsFiles.Add(file.FullName);
+                            cntConcat++;
                             if (tsFiles.Count == numConcat)
                             {
 
+                                // tsファイルを100ずつ結合
+                                // 一度に全部結合させない理由は、FFmpegのパラメータが長すぎると、
+                                // Windowsの仕様で問題が起こるため
+                                // https://support.microsoft.com/ja-jp/kb/2823587/ja
                                 using (Process ps = new Process())
                                 {
                                     String fileName = (cntConcat - numConcat + 1).ToString() + "_" + cntConcat.ToString() + ".ts";
                                     String filePath = this.tempPath + Path.DirectorySeparatorChar + fileName;
 
                                     ps.StartInfo.FileName = FFMPEG_EXE_PATH;
+                                    // concat:を使うと無劣化結合できる
                                     ps.StartInfo.Arguments = "-y -i \"concat:" + String.Join("|", tsFiles.ToArray()) + "\" -c copy \"" + filePath + "\"";
                                     ps.StartInfo.CreateNoWindow = true;
                                     ps.StartInfo.UseShellExecute = false;
                                     ps.Start();
-                                    System.Threading.Thread.Sleep(5000);
+                                    System.Threading.Thread.Sleep(1000);
 
                                     while (true)
                                     {
                                         if (ps.HasExited)
                                         {
-                                            cntConcat += tsFiles.Count;
-                                            concatFiles.Add(filePath);
-
                                             foreach (String ts in tsFiles)
                                             {
                                                 File.Delete(ts);
                                             }
                                             tsFiles = new List<String>();
 
-                                            AppendTextTextBoxMessage(NORMAL_MESSAGE_PREFIX + cntConcat.ToString() + " / " + numFinTs.ToString() + " 動画ファイルの結合・MP4変換中です。" + Environment.NewLine);
+                                            if (ps.ExitCode != 0)
+                                            {
+                                                AppendTextTextBoxMessage(ERROR_MESSAGE_PREFIX + cntConcat.ToString() + " / " + numFinTs.ToString() + " 動画ファイルを結合でエラーが発生しました。" + Environment.NewLine);
+                                            }
+                                            else
+                                            {
+                                                cntConcat += tsFiles.Count;
+                                                concatFiles.Add(filePath);
+                                                AppendTextTextBoxMessage(NORMAL_MESSAGE_PREFIX + cntConcat.ToString() + " / " + numFinTs.ToString() + " 動画ファイルを結合しました。" + Environment.NewLine);
+                                            }
                                             UpdateMessageText();
 
                                             break;
@@ -593,6 +678,7 @@ namespace AfRec
                         }
                     }
 
+                    // 100ずつ処理した後の端数のtsファイルを結合
                     if (tsFiles.Count < numConcat)
                     {
 
@@ -606,22 +692,28 @@ namespace AfRec
                             ps.StartInfo.CreateNoWindow = true;
                             ps.StartInfo.UseShellExecute = false;
                             ps.Start();
-                            System.Threading.Thread.Sleep(5000);
+                            System.Threading.Thread.Sleep(1000);
 
                             while (true)
                             {
                                 if (ps.HasExited)
                                 {
-                                    cntConcat += tsFiles.Count;
-                                    concatFiles.Add(filePath);
-
                                     foreach (String ts in tsFiles)
                                     {
                                         File.Delete(ts);
                                     }
                                     tsFiles = new List<String>();
 
-                                    AppendTextTextBoxMessage(NORMAL_MESSAGE_PREFIX + cntConcat.ToString() + " / " + numFinTs.ToString() + " 動画ファイルの結合・MP4変換中です。" + Environment.NewLine);
+                                    if (ps.ExitCode != 0)
+                                    {
+                                        AppendTextTextBoxMessage(ERROR_MESSAGE_PREFIX + cntConcat.ToString() + " / " + numFinTs.ToString() + " 動画ファイルを結合でエラーが発生しました。" + Environment.NewLine);
+                                    }
+                                    else
+                                    {
+                                        cntConcat += tsFiles.Count;
+                                        concatFiles.Add(filePath);
+                                        AppendTextTextBoxMessage(NORMAL_MESSAGE_PREFIX + cntConcat.ToString() + " / " + numFinTs.ToString() + " 動画ファイルを結合しました。" + Environment.NewLine);
+                                    }
                                     UpdateMessageText();
 
                                     break;
@@ -639,51 +731,66 @@ namespace AfRec
                         }
                     }
 
-                    if (concatFiles.Count == 1)
-                    {
-                        File.Move(concatFiles[0], completeFileName);
-                        AppendTextTextBoxMessage(NORMAL_MESSAGE_PREFIX + "完了しました。ファイル名：" + completeFileName + Environment.NewLine);
-                        UpdateMessageText();
-                    }
-                    else
-                    {
+                    // 出力されるファイル名の形式
+                    // 放送番号 - 放送者名 - 放送タイトル.mp4
+                    String completeFileName = SanitizeFileName(this.vno + " - " + this.nick + " - " + this.title + ".mp4");
 
-                        using (Process ps = new Process())
+                    using (Process ps = new Process())
+                    {
+                        String filePath = this.saveToPath + Path.DirectorySeparatorChar + completeFileName;
+
+                        ps.StartInfo.FileName = FFMPEG_EXE_PATH;
+                        if (concatFiles.Count > 1)
                         {
-                            String filePath = this.saveToPath + Path.DirectorySeparatorChar + completeFileName;
-
-                            ps.StartInfo.FileName = FFMPEG_EXE_PATH;
                             ps.StartInfo.Arguments = "-y -i \"concat:" + String.Join("|", concatFiles.ToArray()) + "\" -c copy -bsf:a aac_adtstoasc \"" + filePath + "\"";
-                            ps.StartInfo.CreateNoWindow = true;
-                            ps.StartInfo.UseShellExecute = false;
-                            ps.Start();
-                            System.Threading.Thread.Sleep(5000);
+                        }
+                        else
+                        {
+                            ps.StartInfo.Arguments = "-y -i \"" + concatFiles[0] + "\" -c copy -bsf:a aac_adtstoasc \"" + filePath + "\"";
+                        }
+                        ps.StartInfo.CreateNoWindow = true;
+                        ps.StartInfo.UseShellExecute = false;
+                        ps.Start();
+                        System.Threading.Thread.Sleep(1000);
 
-                            while (true)
+                        while (true)
+                        {
+                            if (ps.HasExited)
                             {
-                                if (ps.HasExited)
+                                foreach (String concat in concatFiles)
+                                {
+                                    File.Delete(concat);
+                                }
+                                concatFiles = new List<String>();
+
+                                if (ps.ExitCode != 0)
+                                {
+                                    AppendTextTextBoxMessage(ERROR_MESSAGE_PREFIX + "全動画ファイルの結合・MP4変換でエラーが発生しました。" + Environment.NewLine);
+                                }
+                                else
                                 {
                                     AppendTextTextBoxMessage(NORMAL_MESSAGE_PREFIX + "完了しました。ファイル名：" + completeFileName + Environment.NewLine);
-                                    UpdateMessageText();
-                                    break;
                                 }
+                                UpdateMessageText();
 
-                                if (worker.CancellationPending)
-                                {
-                                    ps.Kill();
-                                    AppendTextTextBoxMessage(NORMAL_MESSAGE_PREFIX + "中止しました。" + Environment.NewLine);
-                                    return;
-                                }
-
-                                System.Threading.Thread.Sleep(100);
+                                break;
                             }
-                        }
 
+                            if (worker.CancellationPending)
+                            {
+                                ps.Kill();
+                                AppendTextTextBoxMessage(NORMAL_MESSAGE_PREFIX + "中止しました。" + Environment.NewLine);
+                                return;
+                            }
+
+                            System.Threading.Thread.Sleep(100);
+                        }
                     }
+
                 }
                 catch (Exception ex)
                 {
-                    AppendTextTextBoxMessage(ERROR_MESSAGE_PREFIX + "動画ファイルの結合、MP4変換で問題が発生しました。" + ex.Message + Environment.NewLine);
+                    AppendTextTextBoxMessage(ERROR_MESSAGE_PREFIX + "動画ファイルの処理で問題が発生しました。" + ex.Message + Environment.NewLine);
                     return;
                 }
             }
@@ -696,6 +803,7 @@ namespace AfRec
 
         private void worker_RunWorkerCompleted(object sender, RunWorkerCompletedEventArgs e)
         {
+            // 処理完了(正常＆エラー)時の後処理
             textBoxUrl.Text = "";
             button.Text = START_BUTTON_TEXT;
             try
@@ -723,6 +831,7 @@ namespace AfRec
             }
         }
 
+        // 放送タイトルをファイル名に使用するため、ファイル名として使えない文字のサニタイズを行う
         private String SanitizeFileName(String fileName)
         {
             fileName = fileName.Replace("/", "／").Replace("\\", "￥").Replace("?", "？").Replace("*", "＊")

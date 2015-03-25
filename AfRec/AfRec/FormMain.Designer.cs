@@ -93,7 +93,7 @@
             this.textBoxMessage.Name = "textBoxMessage";
             this.textBoxMessage.ReadOnly = true;
             this.textBoxMessage.ScrollBars = System.Windows.Forms.ScrollBars.Both;
-            this.textBoxMessage.Size = new System.Drawing.Size(440, 120);
+            this.textBoxMessage.Size = new System.Drawing.Size(440, 320);
             this.textBoxMessage.TabIndex = 5;
             // 
             // worker
@@ -106,7 +106,7 @@
             // 
             this.AutoScaleDimensions = new System.Drawing.SizeF(9F, 23F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
-            this.ClientSize = new System.Drawing.Size(484, 262);
+            this.ClientSize = new System.Drawing.Size(484, 462);
             this.Controls.Add(this.textBoxMessage);
             this.Controls.Add(this.button);
             this.Controls.Add(this.textBoxSaveTo);
