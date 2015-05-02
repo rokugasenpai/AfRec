@@ -420,9 +420,7 @@ namespace AfRec
                         String file = elem.file;
                         String chat = elem.chat;
                         chatList.Add(chat);
-                        String fileBase = file.Replace("/" + new Uri(file).Segments.Last(), "");
-                        tsDict.Add(fileBase, new List<String>());
-                        m3u8List.Add(fileBase + "/index_0_av.m3u8");
+                        m3u8List.Add(file);
                     }
 
                 }
@@ -479,7 +477,9 @@ namespace AfRec
                     using (WebClient wc = new WebClient())
                     {
                         Int32 cnt = 0;
-                        String key = m3u8.Replace("/index_0_av.m3u8", "");
+                        String baseUrl = "http://" + new Uri(m3u8).Host;
+                        String key = m3u8.Replace("/mp4hls/index.m3u8", "");
+                        tsDict.Add(key, new List<string>());
                         String res = "";
 
                         while (cnt <= RETRY_TIMES)
@@ -511,23 +511,30 @@ namespace AfRec
                         UpdateMessageText();
 
                         // m3u8ファイルよりtsファイルのURLを抽出
-                        Regex regex = new Regex(@"(http://.+)", RegexOptions.Compiled);
+                        Regex regex = new Regex(@"(.+\d+\.ts)", RegexOptions.Compiled);
                         MatchCollection matches = regex.Matches(res);
                         foreach (Match match in matches)
                         {
                             if (match.Success)
                             {
-                                tsDict[key].Add(match.Groups[1].Value);
+                                tsDict[key].Add(baseUrl + match.Groups[1].Value);
                                 numTs++;
                             }
                         }
                     }
 
                 }
-
-                // tsファイルの数より必要なディスク容量を算出
+                
                 String driveLetter = Application.ExecutablePath.Substring(0, 1);
                 DriveInfo drive = new DriveInfo(driveLetter);
+
+                // 4GB以上のファイルも扱うためRecフォルダがあるドライブのファイルシステムはNTFSかexFATのみ許可
+                if (drive.DriveFormat != "NTFS" && drive.DriveFormat != "exFAT")
+                {
+                    AppendTextTextBoxMessage(ERROR_MESSAGE_PREFIX + "4GB以上のファイルを扱う可能性があるため、" + driveLetter + "ドライブはNTFSかexFATでフォーマットされている必要があります。" + Environment.NewLine);
+                }
+
+                // tsファイルの数より必要なディスク容量を算出
                 Int64 mb = (Int64)Math.Pow(1024, 2);
                 Int64 gb = (Int64)Math.Pow(1024, 3);
                 Int64 shortage = (numTs * (3 * mb) * 2) - drive.AvailableFreeSpace;
