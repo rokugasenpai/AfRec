@@ -1,6 +1,6 @@
 ﻿﻿/*--------------------------------------------------------------------------
 * AfRec
-* ver 1.0.3.0 (2015/03/25)
+* ver 1.0.5.0 (2015/08/21)
 *
 * Copyright © 2015 Rokugasenpai All Rights Reserved.
 * licensed under Microsoft Public License(Ms-PL)
@@ -80,6 +80,11 @@ using Codeplex.Data;
 * ↓
 * [ tsファイルのURLを抽出                 ]
 * ↓
+* [ tsファイルの数より                    ]
+* [ 必要なディスク容量を算出              ]
+* ↓
+* < 必要なディスク容量？ > → ○ エラー表示、処理終了
+* ↓
 * ／ すべて終わるまでループ              ＼
 * [ tsファイルをダウンロード              ]
 * ↓
@@ -87,13 +92,8 @@ using Codeplex.Data;
 * ↓
 * ＼                                     ／
 * ↓
-* [ tsファイルの数より                    ]
-* [ 必要なディスク容量を算出              ]
-* ↓
-* < 必要なディスク容量？ > → ○ エラー表示、処理終了
-* ↓
 * ／ すべて終わるまでループ              ＼
-* [ FFmpegを使い100ずつtsファイルを結合   ]
+* [ FFmpegを使い200ずつtsファイルを結合   ]
 * ↓
 * < 成功？ > → ○ エラー表示、処理終了
 * ↓
@@ -116,19 +116,25 @@ namespace AfRec
     {
         private readonly String CONFIG_XML_PATH = Directory.GetParent(Application.ExecutablePath).FullName + Path.DirectorySeparatorChar + "Config.xml";
         private readonly String FFMPEG_EXE_PATH = Directory.GetParent(Application.ExecutablePath).FullName + Path.DirectorySeparatorChar + "ffmpeg.exe";
+        
         private readonly String START_BUTTON_TEXT = "開始";
         private readonly String CANCEL_BUTTON_TEXT = "キャンセル";
+
         private readonly String NORMAL_MESSAGE_PREFIX = "【 正常 】";
         private readonly String ERROR_MESSAGE_PREFIX = "【エラー】";
+
+        // user-agentがないと503エラーが出る場合がある。
+        private readonly String USER_AGENT = "Mozilla/5.0 (Windows NT 6.1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/44.0.2403.155 Safari/537.36";
+
         // ダウンロードエラー(WebClientのWebException)のリトライ。
-        private readonly Int32 RETRY_TIMES = 1;
+        private readonly Int32 RETRY_TIMES = 3;
         private readonly Int32 RETRY_INTERVAL = 5000;
 
-        // 処理の開始が可能かどうか。例えばFFmpegがなければtrue。
-        private Boolean isUnstartableError = false;
+        // 動画ファイルの保存先。
         private String saveToPath = "";
         // ダウンロードしたTS形式の動画ファイルなどの一時的なファイルが置かれる。
         private String tempPath = "";
+
         // 入力されたURLから判別できる放送主のIDを表す。
         private String id = "";
         // 入力されたURLから判別できる放送のIDを表す。
@@ -138,62 +144,8 @@ namespace AfRec
         // ダウンロードしたjsonファイルから判別できる放送主の名前を表す。
         private String nick = "";
 
-        protected delegate void VoidCallback();
-        protected delegate void SetStringCallback(String arg);
-
-        protected void SetButtonText(String text)
-        {
-            try
-            {
-                if (InvokeRequired)
-                {
-                    SetStringCallback callback = new SetStringCallback(SetButtonText);
-                    Invoke(callback, new object[] { text });
-                    return;
-                }
-                button.Text = text;
-            }
-            catch (Exception)
-            {
-
-            }
-        }
-
-        protected void AppendTextTextBoxMessage(String text)
-        {
-            try
-            {
-                if (InvokeRequired)
-                {
-                    SetStringCallback callback = new SetStringCallback(AppendTextTextBoxMessage);
-                    Invoke(callback, new object[] { text });
-                    return;
-                }
-                textBoxMessage.AppendText(text);
-            }
-            catch (Exception)
-            {
-
-            }
-        }
-
-        protected void UpdateMessageText()
-        {
-            try
-            {
-                if (InvokeRequired)
-                {
-                    VoidCallback callback = new VoidCallback(UpdateMessageText);
-                    Invoke(callback);
-                    return;
-                }
-                textBoxMessage.Update();
-            }
-            catch (Exception)
-            {
-
-            }
-        }
+        // 最終的に成功したら立てるフラグ
+        private Boolean isSuccess = false;
 
         public FormMain()
         {
@@ -208,7 +160,6 @@ namespace AfRec
             if (!File.Exists(FFMPEG_EXE_PATH))
             {
                 textBoxMessage.Text += ERROR_MESSAGE_PREFIX + "ffmepg.exeが見つかりませんでした。" + Environment.NewLine;
-                this.isUnstartableError = true;
                 return;
             }
 
@@ -258,34 +209,34 @@ namespace AfRec
                 catch (Exception)
                 {
                     textBoxMessage.Text += ERROR_MESSAGE_PREFIX + "Config.xmlの読み込みに失敗しました。" + Environment.NewLine;
-                    this.isUnstartableError = true;
+                    return;
+                }             
+            }
+
+            textBoxSaveTo.Text = this.saveToPath;
+            if (!Directory.Exists(this.saveToPath))
+            {
+                try
+                {
+                    Directory.CreateDirectory(this.saveToPath);
+                }
+                catch (Exception)
+                {
+                    textBoxMessage.Text += ERROR_MESSAGE_PREFIX + "保存先フォルダーの作成に失敗しました。" + Environment.NewLine;
                     return;
                 }
-
-                if (!Directory.Exists(this.saveToPath))
-                {
-                    try
-                    {
-                        Directory.CreateDirectory(this.saveToPath);
-                    }
-                    catch (Exception)
-                    {
-                        textBoxMessage.Text += ERROR_MESSAGE_PREFIX + "保存先フォルダーの作成に失敗しました。" + Environment.NewLine;
-                        this.isUnstartableError = true;
-                        return;
-                    }
-                }
-
-                textBoxSaveTo.Text = this.saveToPath;
-            }
+            } 
         }
 
         private void textBoxSaveTo_Enter(object sender, EventArgs e)
         {
+            if (worker.IsBusy)
+            {
+                return;
+            }
+
             if (folderBrowserDialog.ShowDialog() == DialogResult.OK)
             {
-                textBoxSaveTo.Text = folderBrowserDialog.SelectedPath;
-                textBoxSaveTo.Update();
                 XmlDocument xmlDoc = new XmlDocument();
                 if (!File.Exists(CONFIG_XML_PATH))
                 {
@@ -300,46 +251,60 @@ namespace AfRec
                 }
                 else
                 {
-                    xmlDoc.DocumentElement.GetElementsByTagName("save_to").Item(0).InnerText = folderBrowserDialog.SelectedPath;
-                    xmlDoc.Save(CONFIG_XML_PATH);
+                    try
+                    {
+                        xmlDoc.DocumentElement.GetElementsByTagName("save_to").Item(0).InnerText = folderBrowserDialog.SelectedPath;
+                        xmlDoc.Save(CONFIG_XML_PATH);
+                    }
+                    catch (Exception)
+                    {
+                        textBoxMessage.Text += ERROR_MESSAGE_PREFIX + "Config.xmlの読み込みに失敗しました。" + Environment.NewLine;
+                        return;
+                    }
                 }
+
+                this.saveToPath = folderBrowserDialog.SelectedPath;
+                textBoxSaveTo.Text = folderBrowserDialog.SelectedPath;
+                textBoxSaveTo.Update();
             }
         }
 
         private void button_Click(object sender, EventArgs e)
         {
-            if (button.Text == START_BUTTON_TEXT)
+            if (!worker.IsBusy)
             {
-                if (this.isUnstartableError)
-                {
-                    return;
-                }
-                Regex regex = new Regex(@"^\s*?http://afreecatv\.jp/(\d+?)/v/(\d+?)\D*$", RegexOptions.Compiled);
-                Match match = regex.Match(textBoxUrl.Text);
-                if (!match.Success)
-                {
-                    textBoxMessage.Text += ERROR_MESSAGE_PREFIX + "URLが正しいか確認して下さい。" + Environment.NewLine;
-                }
-                else
-                {
-                    this.id = match.Groups[1].Value;
-                    this.vno = match.Groups[2].Value;
-                    worker.RunWorkerAsync();
-                }
+                worker.RunWorkerAsync();
             }
-            else if (button.Text == CANCEL_BUTTON_TEXT)
+            else if (!worker.CancellationPending)
             {
                 worker.CancelAsync();
-            }
-            else
-            {
-
             }
         }
 
         private void worker_DoWork(object sender, DoWorkEventArgs e)
         {
-            SetButtonText(CANCEL_BUTTON_TEXT);
+
+            {
+                Regex regex = new Regex(@"^\s*?http://afreecatv\.jp/(\d+?)/v/(\d+?)\D*$", RegexOptions.Compiled);
+                Match match = regex.Match(textBoxUrl.Text);
+                if (!match.Success)
+                {
+                    AppendTextBoxMessageText(ERROR_MESSAGE_PREFIX + "URLが正しいか確認して下さい。" + Environment.NewLine);
+                    return;
+                }
+                else
+                {
+                    this.id = match.Groups[1].Value;
+                    this.vno = match.Groups[2].Value;
+                }
+            }
+
+            button.Text = CANCEL_BUTTON_TEXT;
+            button.Update();
+            textBoxUrl.ReadOnly = true;
+            textBoxUrl.Update();
+            textBoxSaveTo.ReadOnly = true;
+            textBoxSaveTo.Update();
 
             try
             {
@@ -354,8 +319,7 @@ namespace AfRec
                 }
                 catch (Exception)
                 {
-                    textBoxMessage.Text += ERROR_MESSAGE_PREFIX + "一時フォルダーの作成に失敗しました。" + Environment.NewLine;
-                    this.isUnstartableError = true;
+                    AppendTextBoxMessageText(ERROR_MESSAGE_PREFIX + "一時フォルダーの作成に失敗しました。" + Environment.NewLine);
                     return;
                 }
 
@@ -383,7 +347,7 @@ namespace AfRec
                             json = Encoding.UTF8.GetString(wc1.UploadValues(url, postData));
                             if (worker.CancellationPending)
                             {
-                                AppendTextTextBoxMessage(NORMAL_MESSAGE_PREFIX + "中止しました。" + Environment.NewLine);
+                                AppendTextBoxMessageText(NORMAL_MESSAGE_PREFIX + "中止しました。" + Environment.NewLine);
                                 return;
                             }
                             break;
@@ -392,7 +356,7 @@ namespace AfRec
                         {
                             if (cnt == RETRY_TIMES)
                             {
-                                AppendTextTextBoxMessage(ERROR_MESSAGE_PREFIX + url + "のダウンロードで問題が発生しました。" + webEx.Message + Environment.NewLine);
+                                AppendTextBoxMessageText(ERROR_MESSAGE_PREFIX + url + "のダウンロードで問題が発生しました。" + webEx.Message + Environment.NewLine);
                                 return;
                             }
                             System.Threading.Thread.Sleep(RETRY_INTERVAL);
@@ -400,7 +364,7 @@ namespace AfRec
                         }
                     }
 
-                    AppendTextTextBoxMessage(NORMAL_MESSAGE_PREFIX + "動画情報" + new Uri(url).Segments.Last() + "をダウンロードしました。" + Environment.NewLine);
+                    AppendTextBoxMessageText(NORMAL_MESSAGE_PREFIX + "動画情報" + new Uri(url).Segments.Last() + "をダウンロードしました。" + Environment.NewLine);
                     UpdateMessageText();
                 }
 
@@ -426,7 +390,7 @@ namespace AfRec
                 }
                 catch (Exception ex)
                 {
-                    AppendTextTextBoxMessage(ERROR_MESSAGE_PREFIX + "動画URLの解析で問題が発生しました。" + ex.Message + Environment.NewLine);
+                    AppendTextBoxMessageText(ERROR_MESSAGE_PREFIX + "動画URLの解析で問題が発生しました。" + ex.Message + Environment.NewLine);
                     return;
                 }
 
@@ -441,11 +405,13 @@ namespace AfRec
                         {
                             try
                             {
+                                wc.Headers.Add("user-agent", USER_AGENT);
+                                wc.Proxy = null;
                                 wc.DownloadFile(chat, this.saveToPath + Path.DirectorySeparatorChar + SanitizeFileName(this.vno + " - " + this.nick + " - " + this.title + " - " + (chatList.IndexOf(chat) + 1).ToString() + ".xml"));
-                                
+
                                 if (worker.CancellationPending)
                                 {
-                                    AppendTextTextBoxMessage(NORMAL_MESSAGE_PREFIX + "中止しました。" + Environment.NewLine);
+                                    AppendTextBoxMessageText(NORMAL_MESSAGE_PREFIX + "中止しました。" + Environment.NewLine);
                                     return;
                                 }
 
@@ -455,7 +421,7 @@ namespace AfRec
                             {
                                 if (cnt == RETRY_TIMES)
                                 {
-                                    AppendTextTextBoxMessage(ERROR_MESSAGE_PREFIX + chat + "のダウンロードで問題が発生しました。" + webEx.Message + Environment.NewLine);
+                                    AppendTextBoxMessageText(ERROR_MESSAGE_PREFIX + chat + "のダウンロードで問題が発生しました。" + webEx.Message + Environment.NewLine);
                                     // チャットログは落とせなくても続行とする。
                                 }
                                 System.Threading.Thread.Sleep(RETRY_INTERVAL);
@@ -463,7 +429,7 @@ namespace AfRec
                             }
                         }
 
-                        AppendTextTextBoxMessage(NORMAL_MESSAGE_PREFIX + (chatList.IndexOf(chat) + 1).ToString() + " / " + chatList.Count + " チャットログをダウンロードしました。" + Environment.NewLine);
+                        AppendTextBoxMessageText(NORMAL_MESSAGE_PREFIX + (chatList.IndexOf(chat) + 1).ToString() + " / " + chatList.Count + " チャットログをダウンロードしました。" + Environment.NewLine);
                         UpdateMessageText();
                     }
                 }
@@ -486,11 +452,13 @@ namespace AfRec
                         {
                             try
                             {
+                                wc.Headers.Add("user-agent", USER_AGENT);
+                                wc.Proxy = null;
                                 res = Encoding.UTF8.GetString(wc.DownloadData(m3u8));
 
                                 if (worker.CancellationPending)
                                 {
-                                    AppendTextTextBoxMessage(NORMAL_MESSAGE_PREFIX + "中止しました。" + Environment.NewLine);
+                                    AppendTextBoxMessageText(NORMAL_MESSAGE_PREFIX + "中止しました。" + Environment.NewLine);
                                     return;
                                 }
                                 break;
@@ -499,7 +467,7 @@ namespace AfRec
                             {
                                 if (cnt == RETRY_TIMES)
                                 {
-                                    AppendTextTextBoxMessage(ERROR_MESSAGE_PREFIX + m3u8 + "のダウンロードで問題が発生しました。" + webEx.Message + Environment.NewLine);
+                                    AppendTextBoxMessageText(ERROR_MESSAGE_PREFIX + m3u8 + "のダウンロードで問題が発生しました。" + webEx.Message + Environment.NewLine);
                                     return;
                                 }
                                 System.Threading.Thread.Sleep(RETRY_INTERVAL);
@@ -507,7 +475,7 @@ namespace AfRec
                             }
                         }
 
-                        AppendTextTextBoxMessage(NORMAL_MESSAGE_PREFIX + "動画情報" + new Uri(key).Segments.Last() + "をダウンロードしました。" + Environment.NewLine);
+                        AppendTextBoxMessageText(NORMAL_MESSAGE_PREFIX + "動画情報" + new Uri(key).Segments.Last() + "をダウンロードしました。" + Environment.NewLine);
                         UpdateMessageText();
 
                         // m3u8ファイルよりtsファイルのURLを抽出
@@ -524,14 +492,15 @@ namespace AfRec
                     }
 
                 }
-                
+
                 String driveLetter = Application.ExecutablePath.Substring(0, 1);
                 DriveInfo drive = new DriveInfo(driveLetter);
 
                 // 4GB以上のファイルも扱うためRecフォルダがあるドライブのファイルシステムはNTFSかexFATのみ許可
                 if (drive.DriveFormat != "NTFS" && drive.DriveFormat != "exFAT")
                 {
-                    AppendTextTextBoxMessage(ERROR_MESSAGE_PREFIX + "4GB以上のファイルを扱う可能性があるため、" + driveLetter + "ドライブはNTFSかexFATでフォーマットされている必要があります。" + Environment.NewLine);
+                    AppendTextBoxMessageText(ERROR_MESSAGE_PREFIX + "4GB以上のファイルを扱う可能性があるため、" + driveLetter + "ドライブはNTFSかexFATでフォーマットされている必要があります。" + Environment.NewLine);
+                    return;
                 }
 
                 // tsファイルの数より必要なディスク容量を算出
@@ -541,37 +510,41 @@ namespace AfRec
                 if (shortage > 0)
                 {
                     Double shortageGb = Math.Round((Double)shortage / gb, 2);
-                    AppendTextTextBoxMessage(ERROR_MESSAGE_PREFIX + driveLetter + "ドライブの空き容量が" + shortageGb.ToString() + "GB不足しています。" + Environment.NewLine);
+                    AppendTextBoxMessageText(ERROR_MESSAGE_PREFIX + driveLetter + "ドライブの空き容量が" + shortageGb.ToString() + "GB不足しています。" + Environment.NewLine);
                     return;
                 }
 
-                AppendTextTextBoxMessage(NORMAL_MESSAGE_PREFIX + "動画ファイルのダウンロードを開始します。" + Environment.NewLine);
+                AppendTextBoxMessageText(NORMAL_MESSAGE_PREFIX + "動画ファイルのダウンロードを開始します。" + Environment.NewLine);
                 UpdateMessageText();
                 foreach (KeyValuePair<String, List<String>> kv in tsDict)
                 {
-                    foreach(String ts in kv.Value)
+                    foreach (String ts in kv.Value)
                     {
 
                         // tsファイルのダウンロード
                         using (WebClient wc = new WebClient())
                         {
                             Int32 cnt = 0;
-                            String zeroAdded = "0000" + (numFinTs + 1).ToString();
-                            String fileName = zeroAdded.Substring(zeroAdded.Length - 4, 4) + ".ts";
+                            // 長時間録画対応のため、ゼロパディングの数を4から5に変更
+                            String zeroPadding = "00000";
+                            String zeroAdded = zeroPadding + (numFinTs + 1).ToString();
+                            String fileName = zeroAdded.Substring(zeroAdded.Length - zeroPadding.Length, zeroPadding.Length) + ".ts";
 
                             while (cnt <= RETRY_TIMES)
                             {
                                 try
                                 {
+                                    wc.Headers.Add("user-agent", USER_AGENT);
+                                    wc.Proxy = null;
                                     wc.DownloadFile(ts, this.tempPath + Path.DirectorySeparatorChar + fileName);
                                     numFinTs++;
 
-                                    AppendTextTextBoxMessage(NORMAL_MESSAGE_PREFIX + numFinTs.ToString() + " / " + numTs.ToString() + " 動画ファイルをダウンロードしました。" + Environment.NewLine);
+                                    AppendTextBoxMessageText(NORMAL_MESSAGE_PREFIX + numFinTs.ToString() + " / " + numTs.ToString() + " 動画ファイルをダウンロードしました。" + Environment.NewLine);
                                     UpdateMessageText();
-                                    
+
                                     if (worker.CancellationPending)
                                     {
-                                        AppendTextTextBoxMessage(NORMAL_MESSAGE_PREFIX + "中止しました。" + Environment.NewLine);
+                                        AppendTextBoxMessageText(NORMAL_MESSAGE_PREFIX + "中止しました。" + Environment.NewLine);
                                         return;
                                     }
                                     break;
@@ -588,7 +561,7 @@ namespace AfRec
                                     }
                                     if (cnt == RETRY_TIMES)
                                     {
-                                        AppendTextTextBoxMessage(ERROR_MESSAGE_PREFIX + ts + "のダウンロードで問題が発生しました。" + webEx.Message + Environment.NewLine);
+                                        AppendTextBoxMessageText(ERROR_MESSAGE_PREFIX + ts + "のダウンロードで問題が発生しました。" + webEx.Message + Environment.NewLine);
                                         return;
                                     }
                                     System.Threading.Thread.Sleep(RETRY_INTERVAL);
@@ -600,7 +573,7 @@ namespace AfRec
                     }
                 }
 
-                AppendTextTextBoxMessage(NORMAL_MESSAGE_PREFIX + "動画ファイルの結合を開始します。" + Environment.NewLine);
+                AppendTextBoxMessageText(NORMAL_MESSAGE_PREFIX + "動画ファイルの結合を開始します。" + Environment.NewLine);
                 UpdateMessageText();
 
                 try
@@ -615,7 +588,8 @@ namespace AfRec
 
                     List<String> tsFiles = new List<String>();
                     List<String> concatFiles = new List<String>();
-                    Int32 numConcat = 100;
+                    // 長時間録画対応のため、100ずつから200ずつに変更
+                    Int32 numConcat = 200;
                     Int32 cntConcat = 0;
 
                     foreach (FileInfo file in files)
@@ -623,23 +597,23 @@ namespace AfRec
 
                         if (Regex.Match(file.Name, @"\d+\.ts").Success)
                         {
-                            tsFiles.Add(file.FullName);
+                            tsFiles.Add(file.Name);
                             cntConcat++;
                             if (tsFiles.Count == numConcat)
                             {
 
-                                // tsファイルを100ずつ結合
+                                // tsファイルを200ずつ結合
                                 // 一度に全部結合させない理由は、FFmpegのパラメータが長すぎると、
                                 // Windowsの仕様で問題が起こるため
                                 // https://support.microsoft.com/ja-jp/kb/2823587/ja
                                 using (Process ps = new Process())
                                 {
                                     String fileName = (cntConcat - numConcat + 1).ToString() + "_" + cntConcat.ToString() + ".ts";
-                                    String filePath = this.tempPath + Path.DirectorySeparatorChar + fileName;
 
                                     ps.StartInfo.FileName = FFMPEG_EXE_PATH;
                                     // concat:を使うと無劣化結合できる
-                                    ps.StartInfo.Arguments = "-y -i \"concat:" + String.Join("|", tsFiles.ToArray()) + "\" -c copy \"" + filePath + "\"";
+                                    ps.StartInfo.Arguments = "-y -i \"concat:" + String.Join("|", tsFiles.ToArray()) + "\" -c copy \"" + fileName + "\"";
+                                    ps.StartInfo.WorkingDirectory = this.tempPath;
                                     ps.StartInfo.CreateNoWindow = true;
                                     ps.StartInfo.UseShellExecute = false;
                                     ps.Start();
@@ -657,13 +631,14 @@ namespace AfRec
 
                                             if (ps.ExitCode != 0)
                                             {
-                                                AppendTextTextBoxMessage(ERROR_MESSAGE_PREFIX + cntConcat.ToString() + " / " + numFinTs.ToString() + " 動画ファイルを結合でエラーが発生しました。" + Environment.NewLine);
+                                                AppendTextBoxMessageText(ERROR_MESSAGE_PREFIX + cntConcat.ToString() + " / " + numFinTs.ToString() + " 動画ファイルを結合でエラーが発生しました。" + Environment.NewLine);
+                                                return;
                                             }
                                             else
                                             {
                                                 cntConcat += tsFiles.Count;
-                                                concatFiles.Add(filePath);
-                                                AppendTextTextBoxMessage(NORMAL_MESSAGE_PREFIX + cntConcat.ToString() + " / " + numFinTs.ToString() + " 動画ファイルを結合しました。" + Environment.NewLine);
+                                                concatFiles.Add(fileName);
+                                                AppendTextBoxMessageText(NORMAL_MESSAGE_PREFIX + cntConcat.ToString() + " / " + numFinTs.ToString() + " 動画ファイルを結合しました。" + Environment.NewLine);
                                             }
                                             UpdateMessageText();
 
@@ -673,29 +648,29 @@ namespace AfRec
                                         if (worker.CancellationPending)
                                         {
                                             ps.Kill();
-                                            AppendTextTextBoxMessage(NORMAL_MESSAGE_PREFIX + "中止しました。" + Environment.NewLine);
+                                            AppendTextBoxMessageText(NORMAL_MESSAGE_PREFIX + "中止しました。" + Environment.NewLine);
                                             return;
                                         }
 
                                         System.Threading.Thread.Sleep(100);
                                     }
-                                    
+
                                 }
                             }
                         }
                     }
 
-                    // 100ずつ処理した後の端数のtsファイルを結合
+                    // 200ずつ処理した後の端数のtsファイルを結合
                     if (tsFiles.Count < numConcat)
                     {
 
                         using (Process ps = new Process())
                         {
                             String fileName = (cntConcat - (cntConcat % numConcat) + 1).ToString() + "_" + cntConcat.ToString() + ".ts";
-                            String filePath = this.tempPath + Path.DirectorySeparatorChar + fileName;
 
                             ps.StartInfo.FileName = FFMPEG_EXE_PATH;
-                            ps.StartInfo.Arguments = "-y -i \"concat:" + String.Join("|", tsFiles.ToArray()) + "\" -c copy \"" + filePath + "\"";
+                            ps.StartInfo.Arguments = "-y -i \"concat:" + String.Join("|", tsFiles.ToArray()) + "\" -c copy \"" + fileName + "\"";
+                            ps.StartInfo.WorkingDirectory = this.tempPath;
                             ps.StartInfo.CreateNoWindow = true;
                             ps.StartInfo.UseShellExecute = false;
                             ps.Start();
@@ -713,13 +688,14 @@ namespace AfRec
 
                                     if (ps.ExitCode != 0)
                                     {
-                                        AppendTextTextBoxMessage(ERROR_MESSAGE_PREFIX + cntConcat.ToString() + " / " + numFinTs.ToString() + " 動画ファイルを結合でエラーが発生しました。" + Environment.NewLine);
+                                        AppendTextBoxMessageText(ERROR_MESSAGE_PREFIX + cntConcat.ToString() + " / " + numFinTs.ToString() + " 動画ファイルを結合でエラーが発生しました。" + Environment.NewLine);
+                                        return;
                                     }
                                     else
                                     {
                                         cntConcat += tsFiles.Count;
-                                        concatFiles.Add(filePath);
-                                        AppendTextTextBoxMessage(NORMAL_MESSAGE_PREFIX + cntConcat.ToString() + " / " + numFinTs.ToString() + " 動画ファイルを結合しました。" + Environment.NewLine);
+                                        concatFiles.Add(fileName);
+                                        AppendTextBoxMessageText(NORMAL_MESSAGE_PREFIX + cntConcat.ToString() + " / " + numFinTs.ToString() + " 動画ファイルを結合しました。" + Environment.NewLine);
                                     }
                                     UpdateMessageText();
 
@@ -729,7 +705,7 @@ namespace AfRec
                                 if (worker.CancellationPending)
                                 {
                                     ps.Kill();
-                                    AppendTextTextBoxMessage(NORMAL_MESSAGE_PREFIX + "中止しました。" + Environment.NewLine);
+                                    AppendTextBoxMessageText(NORMAL_MESSAGE_PREFIX + "中止しました。" + Environment.NewLine);
                                     return;
                                 }
 
@@ -755,9 +731,11 @@ namespace AfRec
                         {
                             ps.StartInfo.Arguments = "-y -i \"" + concatFiles[0] + "\" -c copy -bsf:a aac_adtstoasc \"" + filePath + "\"";
                         }
+                        ps.StartInfo.WorkingDirectory = this.tempPath;
                         ps.StartInfo.CreateNoWindow = true;
                         ps.StartInfo.UseShellExecute = false;
                         ps.Start();
+                        AppendTextBoxMessageText(NORMAL_MESSAGE_PREFIX + "全動画ファイルの結合・MP4変換を開始しました。" + Environment.NewLine);
                         System.Threading.Thread.Sleep(1000);
 
                         while (true)
@@ -772,11 +750,13 @@ namespace AfRec
 
                                 if (ps.ExitCode != 0)
                                 {
-                                    AppendTextTextBoxMessage(ERROR_MESSAGE_PREFIX + "全動画ファイルの結合・MP4変換でエラーが発生しました。" + Environment.NewLine);
+                                    AppendTextBoxMessageText(ERROR_MESSAGE_PREFIX + "全動画ファイルの結合・MP4変換でエラーが発生しました。" + Environment.NewLine);
+                                    return;
                                 }
                                 else
                                 {
-                                    AppendTextTextBoxMessage(NORMAL_MESSAGE_PREFIX + "完了しました。ファイル名：" + completeFileName + Environment.NewLine);
+                                    this.isSuccess = true;
+                                    AppendTextBoxMessageText(NORMAL_MESSAGE_PREFIX + "完了しました。ファイル名：" + completeFileName + Environment.NewLine);
                                 }
                                 UpdateMessageText();
 
@@ -786,7 +766,7 @@ namespace AfRec
                             if (worker.CancellationPending)
                             {
                                 ps.Kill();
-                                AppendTextTextBoxMessage(NORMAL_MESSAGE_PREFIX + "中止しました。" + Environment.NewLine);
+                                AppendTextBoxMessageText(NORMAL_MESSAGE_PREFIX + "中止しました。" + Environment.NewLine);
                                 return;
                             }
 
@@ -797,13 +777,13 @@ namespace AfRec
                 }
                 catch (Exception ex)
                 {
-                    AppendTextTextBoxMessage(ERROR_MESSAGE_PREFIX + "動画ファイルの処理で問題が発生しました。" + ex.Message + Environment.NewLine);
+                    AppendTextBoxMessageText(ERROR_MESSAGE_PREFIX + "動画ファイルの処理で問題が発生しました。" + ex.Message + Environment.NewLine);
                     return;
                 }
             }
             catch (Exception ex)
             {
-                AppendTextTextBoxMessage(ERROR_MESSAGE_PREFIX + "問題が発生しました。" + ex.Message + Environment.NewLine);
+                AppendTextBoxMessageText(ERROR_MESSAGE_PREFIX + "問題が発生しました。" + ex.Message + Environment.NewLine);
                 return;
             }
         }
@@ -811,16 +791,32 @@ namespace AfRec
         private void worker_RunWorkerCompleted(object sender, RunWorkerCompletedEventArgs e)
         {
             // 処理完了(正常＆エラー)時の後処理
-            textBoxUrl.Text = "";
-            button.Text = START_BUTTON_TEXT;
             try
             {
                 Directory.Delete(this.tempPath, true);
+
+                if (!this.isSuccess)
+                {
+                    FileInfo[] files = new DirectoryInfo(this.saveToPath).GetFiles();
+                    foreach (FileInfo file in files)
+                    {
+                        if (Regex.Match(file.Name, this.vno + " - " + this.nick + " - " + this.title).Success)
+                        {
+                            file.Delete();
+                        }
+                    }
+                }
+                
             }
             catch (Exception)
             {
 
             }
+
+            textBoxUrl.Text = "";
+            textBoxUrl.ReadOnly = false;
+            textBoxSaveTo.ReadOnly = false;
+            button.Text = START_BUTTON_TEXT;
         }
 
         private void FormMain_FormClosing(object sender, FormClosingEventArgs e)
@@ -835,6 +831,45 @@ namespace AfRec
                 {
                     e.Cancel = true;
                 }
+            }
+        }
+
+        protected delegate void VoidCallback();
+        protected delegate void SetStringCallback(String arg);
+
+        protected void AppendTextBoxMessageText(String text)
+        {
+            try
+            {
+                if (InvokeRequired)
+                {
+                    SetStringCallback callback = new SetStringCallback(AppendTextBoxMessageText);
+                    Invoke(callback, new object[] { text });
+                    return;
+                }
+                textBoxMessage.AppendText(text);
+            }
+            catch (Exception)
+            {
+
+            }
+        }
+
+        protected void UpdateMessageText()
+        {
+            try
+            {
+                if (InvokeRequired)
+                {
+                    VoidCallback callback = new VoidCallback(UpdateMessageText);
+                    Invoke(callback);
+                    return;
+                }
+                textBoxMessage.Update();
+            }
+            catch (Exception)
+            {
+
             }
         }
 
