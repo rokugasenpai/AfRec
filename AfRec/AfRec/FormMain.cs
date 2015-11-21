@@ -1,6 +1,6 @@
 ﻿﻿/*--------------------------------------------------------------------------
 * AfRec
-* ver 1.0.5.0 (2015/08/21)
+* ver 1.0.7.0 (2015/11/21)
 *
 * Copyright © 2015 Rokugasenpai All Rights Reserved.
 * licensed under Microsoft Public License(Ms-PL)
@@ -830,17 +830,13 @@ namespace AfRec
             }
         }
 
-        protected delegate void VoidCallback();
-        protected delegate void SetStringCallback(String arg);
-
         protected void AppendTextBoxMessageText(String text)
         {
             try
             {
                 if (InvokeRequired)
                 {
-                    SetStringCallback callback = new SetStringCallback(AppendTextBoxMessageText);
-                    Invoke(callback, new object[] { text });
+                    Invoke(new Action<String>(arg => AppendTextBoxMessageText(arg)), new object[] { text });
                     return;
                 }
                 textBoxMessage.AppendText(text);
@@ -857,8 +853,7 @@ namespace AfRec
             {
                 if (InvokeRequired)
                 {
-                    VoidCallback callback = new VoidCallback(UpdateMessageText);
-                    Invoke(callback);
+                    Invoke(new Action(() => UpdateMessageText()));
                     return;
                 }
                 textBoxMessage.Update();
