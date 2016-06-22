@@ -1,4 +1,5 @@
-﻿using System.Reflection;
+﻿using System.Resources;
+using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
@@ -10,7 +11,7 @@ using System.Runtime.InteropServices;
 [assembly: AssemblyConfiguration("")]
 [assembly: AssemblyCompany("AfRec")]
 [assembly: AssemblyProduct("AfRec")]
-[assembly: AssemblyCopyright("Copyright © 2015 Rokugasenpai All Rights Reserved.")]
+[assembly: AssemblyCopyright("Copyright © 2016 Rokugasenpai All Rights Reserved.")]
 [assembly: AssemblyTrademark("AfRec")]
 [assembly: AssemblyCulture("")]
 
@@ -32,5 +33,7 @@ using System.Runtime.InteropServices;
 // すべての値を指定するか、下のように '*' を使ってビルドおよびリビジョン番号を 
 // 既定値にすることができます:
 // [assembly: AssemblyVersion("1.0.*")]
-[assembly: AssemblyVersion("1.0.7.0")]
-[assembly: AssemblyFileVersion("1.0.7.0")]
+[assembly: AssemblyVersion("1.0.8.0")]
+[assembly: AssemblyFileVersion("1.0.8.0")]
+[assembly: NeutralResourcesLanguage("ja-JP")]
+
