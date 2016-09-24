@@ -1,6 +1,6 @@
 ﻿/*--------------------------------------------------------------------------
 * AfRec
-* ver 1.0.8.0 (2016/06/23)
+* ver 1.0.9.0 (2016/09/24)
 *
 * Copyright © 2016 Rokugasenpai All Rights Reserved.
 * licensed under Microsoft Public License(Ms-PL)
@@ -142,7 +142,7 @@ namespace AfRec
         // ダウンロードしたjsonファイルから判別できる放送タイトルを表す。
         private String title = "";
         // ダウンロードしたjsonファイルから判別できる放送主の名前を表す。
-        private String nick = "";
+        private String un = "";
 
         // 最終的に成功したら立てるフラグ
         private Boolean isSuccess = false;
@@ -285,17 +285,42 @@ namespace AfRec
         {
 
             {
-                Regex regex = new Regex(@"^\s*?http://(?:www\.)afreecatv\.jp/(\d+?)/v/(\d+?)\D*$", RegexOptions.Compiled);
+                // 旧形式
+                Regex regex = new Regex(@"^\s*?http://.*?\.?afreecatv\.jp/(\d+?)/v/(\d+?)\D*$", RegexOptions.Compiled);
                 Match match = regex.Match(textBoxUrl.Text);
+
+                if (match.Success)
+                {
+                    this.id = match.Groups[1].Value;
+                    this.vno = match.Groups[2].Value;
+                }
+                else
+                {
+                    // 新形式
+                    regex = new Regex(@"^\s*?http://.*?\.?afreecatv\.jp/video_view\.php\?vno=(\d+?)&user_id=(\d+?)\D*$", RegexOptions.Compiled);
+                    match = regex.Match(textBoxUrl.Text);
+                    if (match.Success)
+                    {
+                        this.id = match.Groups[2].Value;
+                        this.vno = match.Groups[1].Value;
+                    }
+                    else
+                    {
+                        // 新形式
+                        regex = new Regex(@"^\s*?http://.*?\.?afreecatv\.jp/video_view\.php\?user_id=(\d+?)&vno=(\d+?)\D*$", RegexOptions.Compiled);
+                        match = regex.Match(textBoxUrl.Text);
+                        if (match.Success)
+                        {
+                            this.id = match.Groups[1].Value;
+                            this.vno = match.Groups[2].Value;
+                        }
+                    }
+                }
+
                 if (!match.Success)
                 {
                     AppendTextBoxMessageText(ERROR_MESSAGE_PREFIX + "URLが正しいか確認して下さい。" + Environment.NewLine);
                     return;
-                }
-                else
-                {
-                    this.id = match.Groups[1].Value;
-                    this.vno = match.Groups[2].Value;
                 }
             }
 
@@ -377,7 +402,7 @@ namespace AfRec
                 {
                     dynamic obj = DynamicJson.Parse(json);
                     this.title = obj.channel.title;
-                    this.nick = obj.channel.nick;
+                    this.un = obj.channel.un;
 
                     foreach (var elem in obj.channel.flist)
                     {
@@ -407,7 +432,7 @@ namespace AfRec
                             {
                                 wc.Headers.Add("user-agent", USER_AGENT);
                                 wc.Proxy = null;
-                                wc.DownloadFile(chat, this.saveToPath + Path.DirectorySeparatorChar + SanitizeFileName(this.vno + " - " + this.nick + " - " + this.title + " - " + (chatList.IndexOf(chat) + 1).ToString() + ".xml"));
+                                wc.DownloadFile(chat, this.saveToPath + Path.DirectorySeparatorChar + SanitizeFileName(this.vno + " - " + this.un + " - " + this.title + " - " + (chatList.IndexOf(chat) + 1).ToString() + ".xml"));
 
                                 if (worker.CancellationPending)
                                 {
@@ -712,7 +737,7 @@ namespace AfRec
 
                     // 出力されるファイル名の形式
                     // 放送番号 - 放送者名 - 放送タイトル.mp4
-                    String completeFileName = SanitizeFileName(this.vno + " - " + this.nick + " - " + this.title + ".mp4");
+                    String completeFileName = SanitizeFileName(this.vno + " - " + this.un + " - " + this.title + ".mp4");
 
                     using (Process ps = new Process())
                     {
@@ -796,7 +821,7 @@ namespace AfRec
                     FileInfo[] files = new DirectoryInfo(this.saveToPath).GetFiles();
                     foreach (FileInfo file in files)
                     {
-                        if (Regex.Match(file.Name, this.vno + " - " + this.nick).Success)
+                        if (Regex.Match(file.Name, this.vno + " - " + this.un).Success)
                         {
                             file.Delete();
                         }
